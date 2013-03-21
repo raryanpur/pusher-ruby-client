@@ -10,7 +10,7 @@ module PusherClient
     VERSION = '0.2.2'
     PROTOCOL = '5'
 
-    attr_accessor :encrypted, :secure
+    attr_accessor :delegate, :encrypted, :secure
     attr_reader :path, :connected, :channels, :global_channel, :socket_id
 
     def initialize(application_key, options={})
@@ -26,6 +26,7 @@ module PusherClient
       @secure = false
       @connected = false
       @encrypted = options[:encrypted] || false
+      @delegate = options[:delegate]
 
       bind('pusher:connection_established') do |data|
         socket = JSON.parse(data)
@@ -61,15 +62,23 @@ module PusherClient
         options = {:ssl => @encrypted || @secure}
         @connection = PusherWebSocket.new(url, options)
         PusherClient.logger.debug "Websocket connected"
-        loop do
-          msg = @connection.receive[0]
-          next if msg.nil?
-          params  = parser(msg)
-          next if (params['socket_id'] && params['socket_id'] == self.socket_id)
-          event_name   = params['event']
-          event_data   = params['data']
-          channel_name = params['channel']
-          send_local_event(event_name, event_data, channel_name)
+        begin
+          loop do
+            msg = @connection.receive[0]
+            next if msg.nil?
+            params  = parser(msg)
+            if !params.respond_to?(:[])
+              PusherClient.logger.debug "Woulda choked here"
+              #next
+            end
+            next if (params['socket_id'] && params['socket_id'] == self.socket_id)
+            event_name   = params['event']
+            event_data   = params['data']
+            channel_name = params['channel']
+            send_local_event(event_name, event_data, channel_name)
+          end
+        rescue EOFError
+          notify_delegate(:lost_connection)
         end
       }
 
@@ -202,6 +211,13 @@ module PusherClient
         return data
       end
     end
+
+    def notify_delegate(notification)
+      if (self.delegate.has_method?(notification))
+        self.delegate.send(notification)
+      end
+    end
+
   end
 
 end
